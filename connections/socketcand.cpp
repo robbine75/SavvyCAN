@@ -218,7 +218,8 @@ void SocketCANd::connectDevice()
 void SocketCANd::deviceConnected(int busNum)
 {
     sendDebug("Opening CAN on Kayak Device!");
-    const char* openCanCmd = ("< open " + hostCanIDs[busNum] + " >").toStdString().c_str();
+    std::string cmd_str=("< open " + hostCanIDs[busNum] + " >").toStdString()
+    const char* openCanCmd = cmd_str.c_str();
     sendStringToTCP(openCanCmd, busNum);
 
     QCoreApplication::processEvents();
