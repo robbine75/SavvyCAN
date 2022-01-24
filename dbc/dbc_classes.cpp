@@ -38,26 +38,21 @@ bool DBC_SIGNAL::isSignalInMessage(const CANFrame &frame)
     {
         if (parentMessage->multiplexorSignal != nullptr)
         {
-            return _sigInMsgPriv(frame, parentMessage->multiplexorSignal);
+            if (multiplexParent->isSignalInMessage(frame)) //parent is in message so check if value is correct
+            {
+                int val;
+                if (!multiplexParent->processAsInt(frame, val)) return false;
+                if ((val >= multiplexLowValue) && (val <= multiplexHighValue))
+                {
+                    return true;
+                }
+                else return false;
+            }
+            else return false;
         }
         else return false;
     }
-    else return true;
-}
-
-bool DBC_SIGNAL::_sigInMsgPriv(const CANFrame &frame, DBC_SIGNAL *multiplexor)
-{
-    int val;
-    if (!multiplexor->processAsInt(frame, val)) return false;
-    foreach (DBC_SIGNAL *child, multiplexedChildren)
-    {
-        if ((val >= child->multiplexLowValue) && (val <= child->multiplexHighValue))
-        {
-            if (child->isMultiplexor) return _sigInMsgPriv(frame, child); //recurse down a level and keep searching
-            if (child == this) return true; //if we are that child then we matched!
-        }
-    }
-    return false; //signal not found in this message
+    else return true; //if signal isn't multiplexed then it's definitely in the message
 }
 
 //Take all the children of this signal and see if they exist in the message. Can be called recursively to descend the dependency tree
@@ -65,7 +60,11 @@ QString DBC_SIGNAL::processSignalTree(const CANFrame &frame)
 {
     QString build;
     int val;
-    if (!this->processAsInt(frame, val)) return build;
+    if (!this->processAsInt(frame, val))
+    {
+        qDebug() << "Could not process multiplexor as an integer.";
+        return build;
+    }
     qDebug() << val;
 
     foreach (DBC_SIGNAL *sig, multiplexedChildren)
@@ -176,6 +175,22 @@ bool DBC_SIGNAL::processAsText(const CANFrame &frame, QString &outString, bool o
     return true;
 }
 
+bool DBC_SIGNAL::getValueString(int64_t intVal, QString &outString)
+{
+    if (valList.count() > 0) //if this is a value list type then look it up and display the proper string
+    {
+        for (int x = 0; x < valList.count(); x++)
+        {
+            if (valList.at(x).value == intVal)
+            {
+                outString = valList.at(x).descript;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 QString DBC_SIGNAL::makePrettyOutput(double floatVal, int64_t intVal, bool outputName, bool isInteger)
 {
     QString outputString;
@@ -222,11 +237,11 @@ bool DBC_SIGNAL::processAsInt(const CANFrame &frame, int32_t &outValue)
     //if (!isSignalInMessage(frame)) return false;
 
     if (valType == SIGNED_INT) isSigned = true;
-    if ( static_cast<int>(frame.payload().length() * 8) < (startBit + signalSize) )
+    /*if ( static_cast<int>(frame.payload().length() * 8) <= (startBit + signalSize) )
     {
         result = 0;
         return false;
-    }
+    }*/
 
     result = static_cast<int32_t>(Utility::processIntegerSignal(frame.payload(), startBit, signalSize, intelByteOrder, isSigned));
 

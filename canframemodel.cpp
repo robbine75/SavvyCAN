@@ -103,6 +103,16 @@ void CANFrameModel::setSysTimeMode(bool mode)
     }
 }
 
+void CANFrameModel::setMillisMode(bool mode)
+{
+    if (Utility::millisMode != mode)
+    {
+        this->beginResetModel();
+        Utility::millisMode = mode;
+        this->endResetModel();
+    }
+}
+
 void CANFrameModel::setInterpretMode(bool mode)
 {
     //if the state of interpretFrames changes then we need to reset the model
@@ -127,14 +137,29 @@ void CANFrameModel::setTimeFormat(QString format)
     endResetModel();
 }
 
+void CANFrameModel::setIgnoreDBCColors(bool mode)
+{
+    if(ignoreDBCColors != mode)
+    {
+        beginResetModel(); //reset model to update the view
+        ignoreDBCColors = mode;
+        endResetModel();
+    }
+}
+
 /*
  * Scan all frames for the smallest timestamp and offset all timestamps so that smallest one is at 0
 */
 void CANFrameModel::normalizeTiming()
 {
     mutex.lock();
-    if (frames.count() == 0) return;
+    if (frames.count() == 0) 
+    {
+        mutex.unlock();
+        return;
+    }
     timeOffset = frames[0].timeStamp().microSeconds();
+    qint64 prevStamp = 0;
 
     //find the absolute lowest timestamp in the whole time. Needed because maybe timestamp was reset in the middle.
     for (int j = 0; j < frames.count(); j++)
@@ -144,7 +169,12 @@ void CANFrameModel::normalizeTiming()
 
     for (int i = 0; i < frames.count(); i++)
     {
-        frames[i].setTimeStamp(QCanBusFrame::TimeStamp(0, frames[i].timeStamp().microSeconds() - timeOffset));
+        qint64 thisStamp = frames[i].timeStamp().microSeconds() - timeOffset;
+        if (thisStamp <= prevStamp)
+        {
+            timeOffset -= prevStamp;
+        }
+        frames[i].setTimeStamp(QCanBusFrame::TimeStamp(0, thisStamp));
     }
 
     this->beginResetModel();
@@ -375,7 +405,7 @@ QVariant CANFrameModel::data(const QModelIndex &index, int role) const
 
     if (role == Qt::BackgroundColorRole)
     {
-        if (dbcHandler != nullptr && interpretFrames)
+        if (dbcHandler != nullptr && interpretFrames && !ignoreDBCColors)
         {
             DBC_MESSAGE *msg = dbcHandler->findMessage(thisFrame);
             if (msg != nullptr)
@@ -408,7 +438,7 @@ QVariant CANFrameModel::data(const QModelIndex &index, int role) const
 
     if (role == Qt::TextColorRole)
     {
-        if (dbcHandler != nullptr && interpretFrames)
+        if (dbcHandler != nullptr && interpretFrames && !ignoreDBCColors)
         {
             DBC_MESSAGE *msg = dbcHandler->findMessage(thisFrame);
             if (msg != nullptr)
@@ -522,11 +552,13 @@ QVariant CANFrameModel::data(const QModelIndex &index, int role) const
                                 tempString.append(sig->processSignalTree(thisFrame));
                             }
                         }
-                        //else if (sig->isMultiplexed && overwriteDups) //wasn't in this exact frame but is in the message. Use cached value
-                        //{
-                        //    tempString.append(sig->makePrettyOutput(sig->cachedValue.toDouble(), sig->cachedValue.toLongLong()));
-                        //    tempString.append("\n");
-                        //}
+                        else if (sig->isMultiplexed && overwriteDups) //wasn't in this exact frame but is in the message. Use cached value
+                        {
+                            bool isInteger = false;
+                            if (sig->valType == UNSIGNED_INT || sig->valType == SIGNED_INT) isInteger = true;
+                            tempString.append(sig->makePrettyOutput(sig->cachedValue.toDouble(), sig->cachedValue.toLongLong(), true, isInteger));
+                            tempString.append("\n");
+                        }
                     }
                 }
             }

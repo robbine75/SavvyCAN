@@ -5,9 +5,10 @@
 #include <QtDebug>
 #include <vector>
 #include "filterutility.h"
+#include "qcpaxistickerhex.h"
 
-const QColor FrameInfoWindow::byteGraphColors[8] = {Qt::blue, Qt::green, Qt::black, Qt::red, //0 1 2 3
-                                                    Qt::gray, Qt::yellow, Qt::cyan, Qt::darkMagenta}; //4 5 6 7
+const QColor FrameInfoWindow::byteGraphColors[8] = {Qt::blue, Qt::green,  Qt::black, Qt::red, //0 1 2 3
+                                                    Qt::gray, Qt::yellow, Qt::cyan,  Qt::darkMagenta}; //4 5 6 7
 QPen FrameInfoWindow::bytePens[8];
 
 const int numIntervalHistBars = 20;
@@ -33,6 +34,15 @@ FrameInfoWindow::FrameInfoWindow(const QVector<CANFrame> *frames, QWidget *paren
     connect(MainWindow::getReference(), &MainWindow::framesUpdated, this, &FrameInfoWindow::updatedFrames);
     connect(ui->btnSave, &QAbstractButton::clicked, this, &FrameInfoWindow::saveDetails);
 
+    connect(ui->check_0, &QCheckBox::stateChanged, this, &FrameInfoWindow::changeGraphVisibility);
+    connect(ui->check_1, &QCheckBox::stateChanged, this, &FrameInfoWindow::changeGraphVisibility);
+    connect(ui->check_2, &QCheckBox::stateChanged, this, &FrameInfoWindow::changeGraphVisibility);
+    connect(ui->check_3, &QCheckBox::stateChanged, this, &FrameInfoWindow::changeGraphVisibility);
+    connect(ui->check_4, &QCheckBox::stateChanged, this, &FrameInfoWindow::changeGraphVisibility);
+    connect(ui->check_5, &QCheckBox::stateChanged, this, &FrameInfoWindow::changeGraphVisibility);
+    connect(ui->check_6, &QCheckBox::stateChanged, this, &FrameInfoWindow::changeGraphVisibility);
+    connect(ui->check_7, &QCheckBox::stateChanged, this, &FrameInfoWindow::changeGraphVisibility);
+
 
     ui->graphHistogram->setInteractions(QCP::iRangeDrag | QCP::iRangeZoom | QCP::iSelectAxes |
                                     QCP::iSelectLegend | QCP::iSelectPlottables);
@@ -57,10 +67,16 @@ FrameInfoWindow::FrameInfoWindow(const QVector<CANFrame> *frames, QWidget *paren
 
     ui->graphBytes->xAxis->setRange(0, 63);
     ui->graphBytes->yAxis->setRange(0, 265);
+    if (useHexTicker)
+    {
+        QSharedPointer<QCPAxisTickerHex> hexTicker(new QCPAxisTickerHex);
+        ui->graphBytes->yAxis->setTicker(hexTicker);
+    }
     ui->graphBytes->axisRect()->setupFullAxesBox();
 
     ui->graphBytes->xAxis->setLabel("Time");
-    ui->graphBytes->yAxis->setLabel("Value");
+    if (useHexTicker) ui->graphBytes->yAxis->setLabel("Value (HEX)");
+    else ui->graphBytes->yAxis->setLabel("Value (Dec)");
 
     ui->graphBytes->legend->setVisible(false);
 
@@ -111,6 +127,8 @@ FrameInfoWindow::FrameInfoWindow(const QVector<CANFrame> *frames, QWidget *paren
         bytePens[i].setColor(byteGraphColors[i]);
         bytePens[i].setWidth(1);
     }
+
+    dbcHandler = DBCHandler::getReference();
 }
 
 void FrameInfoWindow::showEvent(QShowEvent* event)
@@ -132,7 +150,7 @@ bool FrameInfoWindow::eventFilter(QObject *obj, QEvent *event)
         switch (keyEvent->key())
         {
         case Qt::Key_F1:
-            HelpWindow::getRef()->showHelp("framedetails.html");
+            HelpWindow::getRef()->showHelp("framedetails.md");
             break;
         }
         return true;
@@ -152,6 +170,7 @@ void FrameInfoWindow::closeEvent(QCloseEvent *event)
 {
     Q_UNUSED(event)
     writeSettings();
+    emit rejected();
 }
 
 void FrameInfoWindow::readSettings()
@@ -173,7 +192,7 @@ void FrameInfoWindow::readSettings()
         move(Utility::constrainedWindowPos(settings.value("FrameInfo/WindowPos", QPoint(50, 50)).toPoint()));
     }
     useOpenGL = settings.value("Main/UseOpenGL", false).toBool();
-
+    useHexTicker = settings.value("InfoCompare/GraphHex", false).toBool();
 }
 
 void FrameInfoWindow::writeSettings()
@@ -267,6 +286,7 @@ void FrameInfoWindow::updateDetailsWindow(QString newID)
     QVector<double> histGraphX, histGraphY;
     QVector<double> byteGraphX, byteGraphY[8];
     QVector<double> timeGraphX, timeGraphY;
+    QHash<QString, QHash<QString, int>> signalInstances;
     double maxY = -1000.0;
     uint8_t changedBits[8];
     uint8_t referenceBits[8];
@@ -378,6 +398,7 @@ void FrameInfoWindow::updateDetailsWindow(QString newID)
             for (int k = 0; k < 256; k++) dataHistogram[k][i] = 0;
         }
         for (int j = 0; j < 64; j++) bitfieldHistogram[j] = 0;
+        signalInstances.clear();
 
         data = reinterpret_cast<const unsigned char *>(frameCache.at(0).payload().constData());
         dataLen = frameCache.at(0).payload().length();
@@ -391,6 +412,8 @@ void FrameInfoWindow::updateDetailsWindow(QString newID)
 
         std::vector<int64_t> sortedIntervals;
         int64_t intervalSum = 0;
+
+        DBC_MESSAGE *msg = dbcHandler->findMessageForFilter(targettedID, nullptr);
 
         //then find all data points
         for (int j = 0; j < frameCache.count(); j++)
@@ -437,6 +460,28 @@ void FrameInfoWindow::updateDetailsWindow(QString newID)
                     }
                 }
                 changedBits[c] |= referenceBits[c] ^ dat;
+            }
+
+            //Search every signal in the selected message and give output of the range the signal took and
+            //how many messages contained each discrete value.
+            if (msg)
+            {
+                int numSignals = msg->sigHandler->getCount();
+                for (int i = 0; i < numSignals; i++)
+                {
+                    DBC_SIGNAL *sig = msg->sigHandler->findSignalByIdx(i);
+                    if (sig)
+                    {
+                        if (sig->isSignalInMessage(frameCache.at(j)))
+                        {
+                            QString sigVal;
+                            if (sig->processAsText(frameCache.at(j), sigVal, false))
+                            {
+                                signalInstances[sig->name][sigVal] = signalInstances[sig->name][sigVal] + 1;
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -512,6 +557,8 @@ void FrameInfoWindow::updateDetailsWindow(QString newID)
         tempItem = new QTreeWidgetItem();
         tempItem->setText(0, tr("Minimum range to fit 90% of inter-frame intervals: ") + QString::number((intervalPctl95 - intervalPctl5) / 1000.0) + "ms");
         baseNode->addChild(tempItem);
+
+        //display accumulated data for all the bytes in the message
         for (int c = 0; c < maxLen; c++)
         {
             dataBase = new QTreeWidgetItem();
@@ -558,6 +605,22 @@ void FrameInfoWindow::updateDetailsWindow(QString newID)
         }
         baseNode->addChild(dataBase);
 
+        QHash<QString, QHash<QString, int>>::const_iterator it = signalInstances.constBegin();
+        while (it != signalInstances.constEnd()) {
+            dataBase = new QTreeWidgetItem();
+            dataBase->setText(0, it.key());
+            QHash<QString,int>::const_iterator itVal = signalInstances[it.key()].constBegin();
+            while (itVal != signalInstances[it.key()].constEnd())
+            {
+                tempItem = new QTreeWidgetItem();
+                tempItem->setText(0, itVal.key() + ": " + QString::number(itVal.value()));
+                dataBase->addChild(tempItem);
+                ++itVal;
+            }
+            baseNode->addChild(dataBase);
+            ++it;
+        }
+
         ui->treeDetails->insertTopLevelItem(0, baseNode);
 
         ui->graphHistogram->clearGraphs();
@@ -577,7 +640,7 @@ void FrameInfoWindow::updateDetailsWindow(QString newID)
         ui->graphBytes->clearGraphs();
         for (int graphs = 0; graphs < 8; graphs++)
         {
-            ui->graphBytes->addGraph();
+            graphRef[graphs] = ui->graphBytes->addGraph();
             ui->graphBytes->graph()->setData(byteGraphX, byteGraphY[graphs]);
             ui->graphBytes->graph()->setPen(bytePens[graphs]);
         }
@@ -598,6 +661,15 @@ void FrameInfoWindow::updateDetailsWindow(QString newID)
         ui->timeHistogram->axisRect()->setupFullAxesBox();
         ui->timeHistogram->rescaleAxes();
         ui->timeHistogram->replot();
+
+        ui->check_0->setChecked(true);
+        ui->check_1->setChecked(true);
+        ui->check_2->setChecked(true);
+        ui->check_3->setChecked(true);
+        ui->check_4->setChecked(true);
+        ui->check_5->setChecked(true);
+        ui->check_6->setChecked(true);
+        ui->check_7->setChecked(true);
     }
     else
     {
@@ -669,6 +741,24 @@ void FrameInfoWindow::saveDetails()
             outFile->close();
             delete outFile;
         }
+    }
+}
+
+void FrameInfoWindow::changeGraphVisibility(int state){
+    QCheckBox *sender = qobject_cast<QCheckBox *>(QObject::sender());
+    if(sender){
+        sender->objectName();
+        int graphId = sender->objectName().right(1).toInt();
+        for (int k = 0; k < 8; k++)
+        {
+            if (k == graphId && graphRef[k] && graphRef[k]->data()){
+                graphRef[k]->setVisible(state);
+                qDebug() << graphId << state << k;
+            }
+        }
+        qDebug() << graphId << state;
+
+        ui->graphBytes->replot();
     }
 }
 

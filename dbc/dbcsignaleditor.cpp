@@ -35,6 +35,8 @@ DBCSignalEditor::DBCSignalEditor(QWidget *parent) :
     ui->comboType->addItem("DOUBLE PRECISION");
     ui->comboType->addItem("STRING");
 
+    ui->bitfield->setMode(GridMode::SIGNAL_VIEW);
+
     connect(ui->bitfield, SIGNAL(gridClicked(int,int)), this, SLOT(bitfieldClicked(int,int)));
     connect(ui->valuesTable, SIGNAL(customContextMenuRequested(QPoint)), this, SLOT(onCustomMenuValues(QPoint)));
     ui->valuesTable->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -310,7 +312,7 @@ bool DBCSignalEditor::eventFilter(QObject *obj, QEvent *event)
         switch (keyEvent->key())
         {
         case Qt::Key_F1:
-            HelpWindow::getRef()->showHelp("signaleditor.html");
+            HelpWindow::getRef()->showHelp("signaleditor.md");
             break;
         }
         return true;
@@ -371,6 +373,18 @@ void DBCSignalEditor::showEvent(QShowEvent* event)
 
     fillSignalForm(currentSignal);
     fillValueTable(currentSignal);
+
+    ui->bitfield->clearSignalNames();
+    for (int x = 0; x < dbcMessage->sigHandler->getCount(); x++)
+    {
+        DBC_SIGNAL *sig = dbcMessage->sigHandler->findSignalByIdx(x);
+        //only set a signal name for signals which match multiplexparent with our currentsignal
+        if (!sig->multiplexParent || ((sig->multiplexParent == currentSignal->multiplexParent) && (sig->multiplexHighValue == currentSignal->multiplexHighValue)) )
+        {
+            ui->bitfield->setSignalNames(x, sig->name);
+            qDebug() << sig->name << sig->multiplexParent;
+        }
+    }
 }
 
 void DBCSignalEditor::refreshView()
@@ -635,6 +649,14 @@ void DBCSignalEditor::generateUsedBits()
     {
         DBC_SIGNAL *sig = dbcMessage->sigHandler->findSignalByIdx(x);
 
+        //only pay attention to this signal if it's multiplexParent matches currentSignal or is null
+
+        if (sig->multiplexParent)
+        {
+            if (sig->multiplexParent != currentSignal->multiplexParent) continue; //go thee away!
+            if (sig->multiplexHighValue != currentSignal->multiplexHighValue) continue; //buzz off
+            if (sig->multiplexLowValue != currentSignal->multiplexLowValue) continue;
+        }
         startBit = sig->startBit;
 
         if (sig->intelByteOrder)

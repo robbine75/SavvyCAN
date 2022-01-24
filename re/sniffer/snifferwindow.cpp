@@ -12,7 +12,7 @@ SnifferWindow::SnifferWindow(QWidget *parent) :
     QDialog(parent),
     ui(new Ui::snifferWindow),
     mModel(this),
-    mTimer(this),
+    mGUITimer(this),
     mFilter(false)
 {
     ui->setupUi(this);
@@ -35,8 +35,12 @@ SnifferWindow::SnifferWindow(QWidget *parent) :
     ui->listWidget->setSortingEnabled(true);
 
     /* connect timer */
-    connect(&mTimer, &QTimer::timeout, this, &SnifferWindow::update);
-    mTimer.setInterval(200);
+    connect(&mGUITimer, &QTimer::timeout, this, &SnifferWindow::update);
+    mGUITimer.setInterval(200);
+    connect(&mNotchTimer, &QTimer::timeout,this, &SnifferWindow::notchTick);
+    mNotchTimer.setInterval(ui->spinNotchInterval->value());
+
+    notchPingPong = false;
 
     /* connect buttons */
     connect(ui->btNotch, &QPushButton::clicked, &mModel, &SnifferModel::notch);
@@ -59,6 +63,8 @@ SnifferWindow::SnifferWindow(QWidget *parent) :
                 }
             }
     );
+    connect(ui->spinNotchInterval, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int i){mNotchTimer.setInterval(i);});
+    connect(ui->spinExpireInterval, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int i){mModel.setExpireInterval(i);});
 }
 
 SnifferWindow::~SnifferWindow()
@@ -76,15 +82,16 @@ void SnifferWindow::readSettings()
         resize(settings.value("Sniffer/WindowSize", QSize(1100, 750)).toSize());
         move(Utility::constrainedWindowPos(settings.value("Sniffer/WindowPos", QPoint(50, 50)).toPoint()));
         ui->treeView->setColumnWidth(0, settings.value("Sniffer/DeltaColumn", 110).toUInt());
-        ui->treeView->setColumnWidth(1, settings.value("Sniffer/IDColumn", 70).toUInt());
-        ui->treeView->setColumnWidth(2, settings.value("Sniffer/Data0Column", 92).toUInt());
-        ui->treeView->setColumnWidth(3, settings.value("Sniffer/Data1Column", 92).toUInt());
-        ui->treeView->setColumnWidth(4, settings.value("Sniffer/Data2Column", 92).toUInt());
-        ui->treeView->setColumnWidth(5, settings.value("Sniffer/Data3Column", 92).toUInt());
-        ui->treeView->setColumnWidth(6, settings.value("Sniffer/Data4Column", 92).toUInt());
-        ui->treeView->setColumnWidth(7, settings.value("Sniffer/Data5Column", 92).toUInt());
-        ui->treeView->setColumnWidth(8, settings.value("Sniffer/Data6Column", 92).toUInt());
-        ui->treeView->setColumnWidth(9, settings.value("Sniffer/Data7Column", 92).toUInt());
+        ui->treeView->setColumnWidth(1, settings.value("Sniffer/FrequencyColumn", 110).toUInt());
+        ui->treeView->setColumnWidth(2, settings.value("Sniffer/IDColumn", 70).toUInt());
+        ui->treeView->setColumnWidth(3, settings.value("Sniffer/Data0Column", 92).toUInt());
+        ui->treeView->setColumnWidth(4, settings.value("Sniffer/Data1Column", 92).toUInt());
+        ui->treeView->setColumnWidth(5, settings.value("Sniffer/Data2Column", 92).toUInt());
+        ui->treeView->setColumnWidth(6, settings.value("Sniffer/Data3Column", 92).toUInt());
+        ui->treeView->setColumnWidth(7, settings.value("Sniffer/Data4Column", 92).toUInt());
+        ui->treeView->setColumnWidth(8, settings.value("Sniffer/Data5Column", 92).toUInt());
+        ui->treeView->setColumnWidth(9, settings.value("Sniffer/Data6Column", 92).toUInt());
+        ui->treeView->setColumnWidth(10, settings.value("Sniffer/Data7Column", 92).toUInt());
     }
 }
 
@@ -97,15 +104,16 @@ void SnifferWindow::writeSettings()
         settings.setValue("Sniffer/WindowSize", size());
         settings.setValue("Sniffer/WindowPos", pos());
         settings.setValue("Sniffer/DeltaColumn", ui->treeView->columnWidth(0));
-        settings.setValue("Sniffer/IDColumn", ui->treeView->columnWidth(1));
-        settings.setValue("Sniffer/Data0Column", ui->treeView->columnWidth(2));
-        settings.setValue("Sniffer/Data1Column", ui->treeView->columnWidth(3));
-        settings.setValue("Sniffer/Data2Column", ui->treeView->columnWidth(4));
-        settings.setValue("Sniffer/Data3Column", ui->treeView->columnWidth(5));
-        settings.setValue("Sniffer/Data4Column", ui->treeView->columnWidth(6));
-        settings.setValue("Sniffer/Data5Column", ui->treeView->columnWidth(7));
-        settings.setValue("Sniffer/Data6Column", ui->treeView->columnWidth(8));
-        settings.setValue("Sniffer/Data7Column", ui->treeView->columnWidth(9));
+        settings.setValue("Sniffer/FrequencyColumn", ui->treeView->columnWidth(1));
+        settings.setValue("Sniffer/IDColumn", ui->treeView->columnWidth(2));
+        settings.setValue("Sniffer/Data0Column", ui->treeView->columnWidth(3));
+        settings.setValue("Sniffer/Data1Column", ui->treeView->columnWidth(4));
+        settings.setValue("Sniffer/Data2Column", ui->treeView->columnWidth(5));
+        settings.setValue("Sniffer/Data3Column", ui->treeView->columnWidth(6));
+        settings.setValue("Sniffer/Data4Column", ui->treeView->columnWidth(7));
+        settings.setValue("Sniffer/Data5Column", ui->treeView->columnWidth(8));
+        settings.setValue("Sniffer/Data6Column", ui->treeView->columnWidth(9));
+        settings.setValue("Sniffer/Data7Column", ui->treeView->columnWidth(10));
     }
 }
 
@@ -113,7 +121,8 @@ void SnifferWindow::showEvent(QShowEvent* event)
 {
     QDialog::showEvent(event);
     connect(CANConManager::getInstance(), &CANConManager::framesReceived, &mModel, &SnifferModel::update);
-    mTimer.start();
+    mGUITimer.start();
+    mNotchTimer.start();
     readSettings();
     installEventFilter(this);
     qDebug() << "show";
@@ -124,7 +133,7 @@ void SnifferWindow::closeEvent(QCloseEvent *event)
 {
     Q_UNUSED(event);
     /* stop timer */
-    mTimer.stop();
+    mGUITimer.stop();
     /* disconnect reception of frames */
     disconnect(CANConManager::getInstance(), 0, this, 0);
     writeSettings();
@@ -145,7 +154,7 @@ bool SnifferWindow::eventFilter(QObject *obj, QEvent *event)
         switch (keyEvent->key())
         {
         case Qt::Key_F1:
-            HelpWindow::getRef()->showHelp("sniffer.html");
+            HelpWindow::getRef()->showHelp("sniffer.md");
             break;
         }
         return true;
@@ -161,6 +170,23 @@ void SnifferWindow::update()
     mModel.refresh();
 }
 
+void SnifferWindow::notchTick()
+{
+    notchPingPong = !notchPingPong;
+    if (notchPingPong)
+    {
+        ui->lblNotch->setBackgroundRole(QPalette::Link);
+        ui->lblNotch->repaint();
+        //qDebug() << "Tick";
+    }
+    else
+    {
+        ui->lblNotch->setBackgroundRole(QPalette::Background);
+        ui->lblNotch->repaint();
+        //qDebug() << "Tock";
+    }
+    mModel.updateNotchPoint();
+}
 
 void SnifferWindow::fltAll()
 {

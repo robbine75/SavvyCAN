@@ -431,7 +431,9 @@ DBC_MESSAGE* DBCFile::parseMessageLine(QString line)
     if (match.hasMatch())
     {
         DBC_MESSAGE msg;
-        msg.ID = match.captured(1).toULong() & 0x7FFFFFFFul; //the ID is always stored in decimal format
+        uint32_t ID = match.captured(1).toULong(); //the ID is always stored in decimal format
+        msg.ID = ID & 0x1FFFFFFFul;
+        msg.extendedID = (ID & 80000000ul) ? true : false;
         msg.name = match.captured(2);
         msg.len = match.captured(3).toUInt();
         msg.sender = findNodeByName(match.captured(4));
@@ -449,7 +451,7 @@ DBC_SIGNAL* DBCFile::parseSignalLine(QString line, DBC_MESSAGE *msg)
     QRegularExpressionMatch match;
 
     int offset = 0;
-    bool isMultiplexor = false;
+    bool isMessageMultiplexor = false;
     //bool isMultiplexed = false;
     DBC_SIGNAL sig;
 
@@ -465,7 +467,7 @@ DBC_SIGNAL* DBCFile::parseSignalLine(QString line, DBC_MESSAGE *msg)
     if (match.hasMatch())
     {
         qDebug() << "Multiplexor signal";
-        isMultiplexor = true;
+        isMessageMultiplexor = true;
         sig.isMultiplexor = true;
     }
     else
@@ -488,7 +490,7 @@ DBC_SIGNAL* DBCFile::parseSignalLine(QString line, DBC_MESSAGE *msg)
             if (match.hasMatch())
             {
                 qDebug() << "Extended Multiplexor Signal";
-                sig.isMultiplexor = true; //we don't set the local isMultiplexor variable because this isn't the top level multiplexor
+                sig.isMultiplexor = true; //we don't set the local isMessageMultiplexor variable because this isn't the top level multiplexor
                 sig.isMultiplexed = true; //but, it is both a multiplexor and multiplexed
                 sig.multiplexLowValue = match.captured(2).toInt();
                 sig.multiplexHighValue = sig.multiplexLowValue;
@@ -573,7 +575,7 @@ DBC_SIGNAL* DBCFile::parseSignalLine(QString line, DBC_MESSAGE *msg)
         if (msg)
         {
             msg->sigHandler->addSignal(sig);
-            if (isMultiplexor) msg->multiplexorSignal = msg->sigHandler->findSignalByName(sig.name);
+            if (isMessageMultiplexor) msg->multiplexorSignal = msg->sigHandler->findSignalByName(sig.name);
             return msg->sigHandler->findSignalByName(sig.name);
         }
         else return nullptr;
@@ -598,7 +600,7 @@ bool DBCFile::parseSignalMultiplexValueLine(QString line)
     //captured 5 is the upper bound
     if (match.hasMatch())
     {
-        DBC_MESSAGE *msg = messageHandler->findMsgByID(match.captured(1).toUInt());
+        DBC_MESSAGE *msg = messageHandler->findMsgByID(match.captured(1).toULong() & 0x1FFFFFFFUL);
         if (msg != nullptr)
         {
             DBC_SIGNAL *thisSignal = msg->sigHandler->findSignalByName(match.captured(2));
@@ -632,7 +634,7 @@ bool DBCFile::parseValueLine(QString line)
     if (match.hasMatch())
     {
         //qDebug() << "Data was: " << match.captured(3);
-        DBC_MESSAGE *msg = messageHandler->findMsgByID(match.captured(1).toUInt());
+        DBC_MESSAGE *msg = messageHandler->findMsgByID(match.captured(1).toULong() & 0x1FFFFFFFul);
         if (msg != nullptr)
         {
             DBC_SIGNAL *sig = msg->sigHandler->findSignalByName(match.captured(2));
@@ -646,7 +648,7 @@ bool DBCFile::parseValueLine(QString line)
                     match = regex.match(tokenString);
                     if (match.hasMatch())
                     {
-                        val.value = match.captured(1).toInt();
+                        val.value = match.captured(1).toULong() & 0x1FFFFFFFul;
                         val.descript = match.captured(2);
                         //qDebug() << "sig val " << val.value << " desc " <<val.descript;
                         sig->valList.append(val);
@@ -681,7 +683,7 @@ bool DBCFile::parseAttributeLine(QString line)
         if (foundAttr)
         {
             qDebug() << "That attribute does exist";
-            DBC_MESSAGE *foundMsg = messageHandler->findMsgByID(match.captured(2).toUInt());
+            DBC_MESSAGE *foundMsg = messageHandler->findMsgByID(match.captured(2).toUInt() & 0x1FFFFFFFul);
             if (foundMsg)
             {
                 qDebug() << "It references a valid, registered message";
@@ -713,7 +715,7 @@ bool DBCFile::parseAttributeLine(QString line)
         if (foundAttr)
         {
             qDebug() << "That attribute does exist";
-            DBC_MESSAGE *foundMsg = messageHandler->findMsgByID(match.captured(2).toUInt());
+            DBC_MESSAGE *foundMsg = messageHandler->findMsgByID(match.captured(2).toUInt() & 0x1FFFFFFFUL);
             if (foundMsg)
             {
                 qDebug() << "It references a valid, registered message";
@@ -1098,10 +1100,14 @@ bool DBCFile::loadFile(QString fileName)
             //if this doesn't have a multiplex parent set but is multiplexed then it must have used
             //simple multiplexing instead of any extended specification. So, fill in the multiplexor signal here
             //and also write the extended entry for it too.
-            if (sig->isMultiplexed && (sig->multiplexParent == nullptr) )
+            if (sig->isMultiplexed && (sig->multiplexParent == nullptr) && (msg->multiplexorSignal) )
             {
                 sig->multiplexParent = msg->multiplexorSignal;
                 msg->multiplexorSignal->multiplexedChildren.append(sig);
+            }
+            if ( sig->isMultiplexed && (!msg->multiplexorSignal) ) //marked multiplexed but there is no multiplexor.
+            {
+                sig->isMultiplexed = false; //can't multiplex if there is no multiplexor!
             }
         }
     }
@@ -1343,20 +1349,20 @@ bool DBCFile::saveFile(QString fileName)
         }
 
         uint32_t ID = msg->ID;
-        if (msg->ID > 0x7FF) msg->ID += 0x80000000ul; //set bit 31 if this ID is extended.
+        if (msg->ID > 0x7FF || msg->extendedID) msg->ID += 0x80000000ul; //set bit 31 if this ID is extended.
 
         msgOutput.append("BO_ " + QString::number(ID) + " " + msg->name + ": " + QString::number(msg->len) +
                          " " + msg->sender->name + "\n");
         if (msg->comment.length() > 0)
         {
-            commentsOutput.append("CM_ BO_ " + QString::number(msg->ID) + " \"" + msg->comment + "\";\n");
+            commentsOutput.append("CM_ BO_ " + QString::number(ID) + " \"" + msg->comment + "\";\n");
         }
 
         //If this message has attributes then compile them into attributes list to output later on.
         if (msg->attributes.count() > 0)
         {
             foreach (DBC_ATTRIBUTE_VALUE val, msg->attributes) {
-                attrValOutput.append("BA_ \"" + val.attrName + "\" BO_ " + QString::number(msg->ID) + " ");
+                attrValOutput.append("BA_ \"" + val.attrName + "\" BO_ " + QString::number(ID) + " ");
                 switch (val.value.type())
                 {
                 case QMetaType::QString:
@@ -1426,14 +1432,14 @@ bool DBCFile::saveFile(QString fileName)
                              + "\" " + sig->receiver->name + "\n");
             if (sig->comment.length() > 0)
             {
-                commentsOutput.append("CM_ SG_ " + QString::number(msg->ID) + " " + sig->name + " \"" + sig->comment + "\";\n");
+                commentsOutput.append("CM_ SG_ " + QString::number(ID) + " " + sig->name + " \"" + sig->comment + "\";\n");
             }
 
             //if this signal has attributes then compile them in a special list of attributes
             if (sig->attributes.count() > 0)
             {
                 foreach (DBC_ATTRIBUTE_VALUE val, sig->attributes) {
-                    attrValOutput.append("BA_ \"" + val.attrName + "\" SG_ " + QString::number(msg->ID) + " " + sig->name + " ");
+                    attrValOutput.append("BA_ \"" + val.attrName + "\" SG_ " + QString::number(ID) + " " + sig->name + " ");
                     switch (val.value.type())
                     {
                     case QMetaType::QString:
@@ -1448,7 +1454,7 @@ bool DBCFile::saveFile(QString fileName)
 
             if (sig->valList.count() > 0)
             {
-                valuesOutput.append("VAL_ " + QString::number(msg->ID) + " " + sig->name);
+                valuesOutput.append("VAL_ " + QString::number(ID) + " " + sig->name);
                 for (int v = 0; v < sig->valList.count(); v++)
                 {
                     DBC_VAL_ENUM_ENTRY val = sig->valList[v];
@@ -1538,13 +1544,16 @@ bool DBCFile::saveFile(QString fileName)
         {
             DBC_MESSAGE *msg = messageHandler->findMsgByIdx(x);
 
+            uint32_t ID = msg->ID;
+            if (msg->ID > 0x7FF || msg->extendedID) msg->ID += 0x80000000ul; //set bit 31 if this ID is extended.
+
             for (int s = 0; s < msg->sigHandler->getCount(); s++)
             {
                 DBC_SIGNAL *sig = msg->sigHandler->findSignalByIdx(s);
 
                 if (sig->isMultiplexed)
                 {
-                    msgOutput.append("SG_MUL_VAL_ " + QString::number(msg->ID) + " ");
+                    msgOutput.append("SG_MUL_VAL_ " + QString::number(ID) + " ");
                     msgOutput.append(sig->name + " " + sig->parentMessage->name + " ");
                     msgOutput.append(QString::number(sig->multiplexLowValue) + "-" + QString::number(sig->multiplexHighValue) + ";");
                     msgOutput.append("\n");
@@ -1708,6 +1717,176 @@ DBCFile* DBCHandler::loadDBCFile(int idx)
     return nullptr;
 }
 
+DBCFile* DBCHandler::loadSecretCSVFile(QString filename)
+{
+    DBCFile *thisFile;
+    DBC_MESSAGE *pMsg;
+    DBC_SIGNAL *pSig;
+    QByteArray line;
+    int lineCounter = 0;
+    createBlankFile();
+    thisFile = &loadedFiles.last();
+
+    QFile *inFile = new QFile(filename);
+
+    if (!inFile->open(QIODevice::ReadOnly | QIODevice::Text))
+    {
+        delete inFile;
+        return nullptr;
+    }
+
+    //burn first two lines. contains header
+    line = inFile->readLine().simplified().toUpper();
+    line = inFile->readLine().simplified().toUpper();
+
+    while (!inFile->atEnd())
+    {
+        lineCounter++;
+        if (lineCounter > 100)
+        {
+            qApp->processEvents();
+            lineCounter = 0;
+        }
+        line = inFile->readLine().simplified().toUpper();
+        qDebug() << line;
+
+        QList<QByteArray> tokens = line.split(',');
+        if (tokens.length() == 10)
+        {
+            //Message,CAN ID,Signal,Short Name,Start Byte,Start Bit,Len,Data,Range,Conversion
+            //Whl_Rotational_Stat_CheckVal_CE,$0C0,Wheel Rotational Status Check Data,WhlRotatStatChkData, 0, 7, 40,PKT,N/A,N/A
+            //                0                1             2                                3            4  5  6  7    8   9
+            if (tokens[0].length() > 2) //start of a signal def that starts a new message
+            {
+                DBC_MESSAGE msg;
+                msg.name = tokens[0];
+                msg.ID =   tokens[1].mid(1).toLong(nullptr, 16);
+                msg.comment = "";
+                msg.len = 8;
+                msg.sender = thisFile->findNodeByIdx(0);
+                msg.bgColor = QColor(thisFile->findAttributeByName("GenMsgBackgroundColor")->defaultValue.toString());
+                msg.fgColor = QColor(thisFile->findAttributeByName("GenMsgForegroundColor")->defaultValue.toString());
+                thisFile->messageHandler->addMessage(msg);
+                pMsg = thisFile->messageHandler->findMsgByID(msg.ID);
+
+                DBC_SIGNAL sig;
+                sig.parentMessage = pMsg;
+                sig.name = tokens[3];
+                sig.comment = tokens[2];
+                int startBit = (tokens[4].toInt() * 8) + tokens[5].toInt();
+                sig.startBit = startBit;
+                sig.signalSize = tokens[6].toInt();
+                sig.intelByteOrder = false; //always for global-a?
+                sig.receiver = thisFile->findNodeByIdx(0);
+                QList<QByteArray> rangeToks = tokens[8].split('-');
+                if (rangeToks.length() == 2)
+                {
+                    sig.min = rangeToks[0].simplified().toDouble();
+                    sig.max = rangeToks[1].simplified().toDouble();
+                }
+                if (tokens[9].startsWith("E = N")) //not a value table, instead do scaling and bias
+                {
+                    QList<QByteArray> scalingToks = tokens[9].simplified().split(' ');
+                    sig.factor = scalingToks[4].toDouble();
+                    if (scalingToks.count() > 5)
+                    {
+                        if (scalingToks[5] == "+")
+                        {
+                            sig.bias = scalingToks[6].toDouble();
+                        }
+                        if (scalingToks[5] == "-")
+                        {
+                            sig.bias = scalingToks[6].toDouble() * 1.0;
+                        }
+                    }
+                    else
+                    {
+                        sig.factor = 1;
+                        sig.bias = 0;
+                    }
+                }
+                else if (tokens[9].startsWith("$")) //one or more values table entries
+                {
+                    //$0=Inactive
+                    QList<QByteArray> valToks = tokens[9].simplified().mid(1).split('=');
+                    DBC_VAL_ENUM_ENTRY entry;
+                    entry.value = valToks[0].toInt();
+                    entry.descript = valToks[1];
+                    sig.valList.append(entry);
+                }
+                pMsg->sigHandler->addSignal(sig);
+                pSig = pMsg->sigHandler->findSignalByIdx(pMsg->sigHandler->getCount()-1);
+            }
+            //      0     1    2      3            4         5       6   7    8     9
+            //Message,CAN ID,Signal,Short Name,Start Byte,Start Bit,Len,Data,Range,Conversion
+            //,,Wheel Rotational Status Check Data : Left Driven Sequence Number,WRSCD_LftDrvnSqNm, 0, 7, 2,UNM,0 - 3 ,E = N * 1
+            //    2                                                                3                4  5  6 7    8       9
+            else if (tokens[2].length() > 2) //signal definition continuation of previous message
+            {
+                DBC_SIGNAL sig;
+                sig.parentMessage = pMsg;
+                sig.name = tokens[3];
+                sig.comment = tokens[2];
+                int startBit = (tokens[4].toInt() * 8) + tokens[5].toInt();
+                sig.startBit = startBit;
+                sig.signalSize = tokens[6].toInt();
+                sig.intelByteOrder = false; //always for global-a?
+                sig.receiver = thisFile->findNodeByIdx(0);
+                QList<QByteArray> rangeToks = tokens[8].split('-');
+                if (rangeToks.length() == 2)
+                {
+                    sig.min = rangeToks[0].simplified().toDouble();
+                    sig.max = rangeToks[1].simplified().toDouble();
+                }
+                if (tokens[9].startsWith("E = N")) //not a value table, instead do scaling and bias
+                {
+                    QList<QByteArray> scalingToks = tokens[9].simplified().split(' ');
+                    sig.factor = scalingToks[4].toDouble();
+                    if (scalingToks.count() > 5)
+                    {
+                        if (scalingToks[5] == "+")
+                        {
+                            sig.bias = scalingToks[6].toDouble();
+                        }
+                        if (scalingToks[5] == "-")
+                        {
+                            sig.bias = scalingToks[6].toDouble() * 1.0;
+                        }
+                    }
+                    else
+                    {
+                        sig.bias = 0;
+                        sig.factor = 1;
+                    }
+                }
+                else if (tokens[9].startsWith("$")) //one or more values table entries
+                {
+                    //$0=Inactive
+                    QList<QByteArray> valToks = tokens[9].simplified().mid(1).split('=');
+                    DBC_VAL_ENUM_ENTRY entry;
+                    entry.value = valToks[0].toInt();
+                    entry.descript = valToks[1];
+                    sig.valList.append(entry);
+                }
+                pMsg->sigHandler->addSignal(sig);
+                pSig = pMsg->sigHandler->findSignalByIdx(pMsg->sigHandler->getCount()-1);
+            }
+            else if (tokens[9].length() > 2) //additional values
+            {
+                //$0=Inactive
+                QList<QByteArray> valToks = tokens[9].simplified().mid(1).split('=');
+                DBC_VAL_ENUM_ENTRY entry;
+                entry.value = valToks[0].toInt();
+                entry.descript = valToks[1];
+                pSig->valList.append(entry);
+            }
+        }
+    }
+
+    thisFile->setDirtyFlag();
+    return thisFile;
+}
+
 DBCFile* DBCHandler::loadJSONFile(QString filename)
 {
      QSettings settings;
@@ -1859,6 +2038,24 @@ DBCFile* DBCHandler::loadJSONFile(QString filename)
                 }
              }
          }
+
+         for (int x = 0; x < thisFile->messageHandler->getCount(); x++)
+         {
+             DBC_MESSAGE *msg = thisFile->messageHandler->findMsgByIdx(x);
+             for (int y = 0; y < msg->sigHandler->getCount(); y++)
+             {
+                 DBC_SIGNAL *sig = msg->sigHandler->findSignalByIdx(y);
+                 //if this doesn't have a multiplex parent set but is multiplexed then it must have used
+                 //simple multiplexing instead of any extended specification. So, fill in the multiplexor signal here
+                 //and also write the extended entry for it too.
+                 if (sig->isMultiplexed && (sig->multiplexParent == nullptr) )
+                 {
+                     sig->multiplexParent = msg->multiplexorSignal;
+                     msg->multiplexorSignal->multiplexedChildren.append(sig);
+                 }
+             }
+         }
+
          thisFile->setDirtyFlag();
          return thisFile;
 }
@@ -1906,6 +2103,18 @@ DBC_MESSAGE* DBCHandler::findMessage(const CANFrame &frame)
     return nullptr;
 }
 
+DBC_MESSAGE* DBCHandler::findMessage(uint32_t id)
+{
+    for(int i = 0; i < loadedFiles.count(); i++)
+    {
+        DBC_MESSAGE* msg = loadedFiles[i].messageHandler->findMsgByID(id);
+        if (msg != nullptr)
+        {
+            return msg;
+        }
+    }
+    return nullptr;
+}
 
 // This function won't care which bus the DBC file is associated, but will return any message as long as ID matches and the file
 // has filter labeling enabled.
@@ -1920,7 +2129,7 @@ DBC_MESSAGE* DBCHandler::findMessageForFilter(uint32_t id, MatchingCriteria_t * 
             DBC_MESSAGE* msg = loadedFiles[i].messageHandler->findMsgByID(id);
             if (msg != nullptr) 
             {
-                *matchingCriteria = loadedFiles[i].messageHandler->getMatchingCriteria();
+                if (matchingCriteria) *matchingCriteria = loadedFiles[i].messageHandler->getMatchingCriteria();
                 return msg;
             }
         }

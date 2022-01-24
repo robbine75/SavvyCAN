@@ -85,7 +85,7 @@ bool DBCMainEditor::eventFilter(QObject *obj, QEvent *event)
         switch (keyEvent->key())
         {
         case Qt::Key_F1:
-            HelpWindow::getRef()->showHelp("dbc_editor.html");
+            HelpWindow::getRef()->showHelp("dbc_editor.md");
             break;
         case Qt::Key_F3:
             handleSearchForward();
@@ -368,6 +368,12 @@ QString DBCMainEditor::createSignalText(DBC_SIGNAL *sig)
         sigInfo += ") ";
     }
     sigInfo.append(sig->name);
+
+    if (sig->intelByteOrder)
+        sigInfo.append(" [" + QString::number(sig->startBit) + "i " + QString::number(sig->signalSize) + "]");
+    else
+        sigInfo.append(" [" + QString::number(sig->startBit) + "m " + QString::number(sig->signalSize) + "]");
+
     if (sig->comment.count() > 0) sigInfo.append(" - ").append(sig->comment);
     return sigInfo;
 }
@@ -602,6 +608,7 @@ void DBCMainEditor::newSignal()
     }
 
     sig.parentMessage = msg;
+    if (!sig.receiver) sig.receiver = &dbcFile->dbc_nodes[0]; //if receiver not set then set it to... something.
     msg->sigHandler->addSignal(sig);
     sigPtr = msg->sigHandler->findSignalByIdx(msg->sigHandler->getCount() - 1);
     QTreeWidgetItem *newSigItem = new QTreeWidgetItem();
@@ -656,7 +663,7 @@ void DBCMainEditor::deleteCurrentTreeItem()
             }
             else
             {
-                qDebug() << "WTF, could not find the node in the map. That should not happen.";
+                qDebug() << "Could not find the node in the map. That should not happen.";
             }
         }
 
@@ -678,7 +685,7 @@ void DBCMainEditor::deleteCurrentTreeItem()
             }
             else
             {
-                qDebug() << "WTF, could not find the message in the map. That should not happen.";
+                qDebug() << "Could not find the message in the map. That should not happen.";
             }
         }
         break;
@@ -716,15 +723,20 @@ void DBCMainEditor::deleteNode(DBC_NODE *node)
         if (dbcFile->messageHandler->findMsgByIdx(i)->sender == node) deleteMessage(dbcFile->messageHandler->findMsgByIdx(i));
     }
 
-    for (int j = 0; j < dbcFile->dbc_nodes.count(); j++)
-    {
-        if (dbcFile->dbc_nodes.at(j).name == node->name) dbcFile->dbc_nodes.removeAt(j);
-    }
-
     nodeToItem.remove(node);
     itemToNode.remove(currItem);
     ui->treeDBC->removeItemWidget(currItem, 0);
     delete currItem;
+
+    for (int j = 0; j < dbcFile->dbc_nodes.count(); j++)
+    {
+        if (dbcFile->dbc_nodes.at(j).name == node->name)
+        {
+            dbcFile->dbc_nodes.removeAt(j);
+            break;
+        }
+    }
+
     dbcFile->setDirtyFlag();
 }
 

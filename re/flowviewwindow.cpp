@@ -3,6 +3,7 @@
 #include "mainwindow.h"
 #include "helpwindow.h"
 #include "filterutility.h"
+#include "qcpaxistickerhex.h"
 
 const QColor FlowViewWindow::graphColors[8] = {Qt::blue, Qt::green, Qt::black, Qt::red, //0 1 2 3
                                                Qt::gray, Qt::yellow, Qt::cyan, Qt::darkMagenta}; //4 5 6 7
@@ -34,6 +35,11 @@ FlowViewWindow::FlowViewWindow(const QVector<CANFrame> *frames, QWidget *parent)
 
     ui->graphView->xAxis->setRange(0, 8);
     ui->graphView->yAxis->setRange(-10, 265); //run range a bit outside possible number so they aren't plotted in a hard to see place
+    if (useHexTicker)
+    {
+        QSharedPointer<QCPAxisTickerHex> hexTicker(new QCPAxisTickerHex);
+        ui->graphView->yAxis->setTicker(hexTicker);
+    }
     ui->graphView->axisRect()->setupFullAxesBox();
 
     QCPItemText *textLabel = new QCPItemText(ui->graphView);
@@ -46,7 +52,9 @@ FlowViewWindow::FlowViewWindow(const QVector<CANFrame> *frames, QWidget *parent)
     textLabel->setPen(QPen(Qt::black)); // show black border around text
 
     ui->graphView->xAxis->setLabel("Time Axis");
-    ui->graphView->yAxis->setLabel("Value Axis");
+    if (useHexTicker) ui->graphView->yAxis->setLabel("Value Axis (HEX)");
+    else ui->graphView->yAxis->setLabel("Value Axis (dec)");
+
     QFont legendFont = font();
     legendFont.setPointSize(10);
     QFont legendSelectedFont = font();
@@ -96,6 +104,19 @@ FlowViewWindow::FlowViewWindow(const QVector<CANFrame> *frames, QWidget *parent)
     connect(ui->txtTrigger5, SIGNAL(textEdited(QString)), this, SLOT(updateTriggerValues()));
     connect(ui->txtTrigger6, SIGNAL(textEdited(QString)), this, SLOT(updateTriggerValues()));
     connect(ui->txtTrigger7, SIGNAL(textEdited(QString)), this, SLOT(updateTriggerValues()));
+    connect(ui->graphRangeSlider, &QSlider::valueChanged, this, &FlowViewWindow::graphRangeChanged);
+    connect(ui->check_0, &QCheckBox::stateChanged, this, &FlowViewWindow::changeGraphVisibility);
+    connect(ui->check_1, &QCheckBox::stateChanged, this, &FlowViewWindow::changeGraphVisibility);
+    connect(ui->check_2, &QCheckBox::stateChanged, this, &FlowViewWindow::changeGraphVisibility);
+    connect(ui->check_3, &QCheckBox::stateChanged, this, &FlowViewWindow::changeGraphVisibility);
+    connect(ui->check_4, &QCheckBox::stateChanged, this, &FlowViewWindow::changeGraphVisibility);
+    connect(ui->check_5, &QCheckBox::stateChanged, this, &FlowViewWindow::changeGraphVisibility);
+    connect(ui->check_6, &QCheckBox::stateChanged, this, &FlowViewWindow::changeGraphVisibility);
+    connect(ui->check_7, &QCheckBox::stateChanged, this, &FlowViewWindow::changeGraphVisibility);
+
+//    ui->timelineSlider->setTracking(true);
+    connect(ui->timelineSlider, &QSlider::sliderPressed, this, &FlowViewWindow::btnPauseClick);
+    connect(ui->timelineSlider, &QSlider::valueChanged, this, &FlowViewWindow::gotoFrame);
 
     // Using lambda expression to strip away the possible filter label before passing the ID to updateDetailsWindow
     connect(ui->listFrameID, &QListWidget::currentTextChanged, 
@@ -110,7 +131,7 @@ FlowViewWindow::FlowViewWindow(const QVector<CANFrame> *frames, QWidget *parent)
     connect(ui->graphView, SIGNAL(customContextMenuRequested(QPoint)), this, SLOT(contextMenuRequestGraph(QPoint)));
     ui->flowView->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(ui->flowView, SIGNAL(customContextMenuRequested(QPoint)), this, SLOT(contextMenuRequestFlow(QPoint)));
-    connect(ui->flowView, SIGNAL(gridClicked(int,int)), this, SLOT(gotCellClick(int, int)));
+    connect(ui->flowView, SIGNAL(gridClicked(int,int)), this, SLOT(gotCellClick(int,int)));
 
     // Prevent annoying accidental horizontal scrolling when filter list is populated with long interpreted message names
     ui->listFrameID->horizontalScrollBar()->setEnabled(false);
@@ -150,6 +171,7 @@ void FlowViewWindow::closeEvent(QCloseEvent *event)
 {
     Q_UNUSED(event);
     writeSettings();
+    emit rejected(); //can be picked up by main window if needed
 }
 
 void FlowViewWindow::readSettings()
@@ -178,6 +200,7 @@ void FlowViewWindow::readSettings()
 
     secondsMode = settings.value("Main/TimeSeconds", false).toBool();
     openGLMode = settings.value("Main/UseOpenGL", false).toBool();
+    useHexTicker = settings.value("FlowView/GraphHex", false).toBool();
 }
 
 void FlowViewWindow::writeSettings()
@@ -214,7 +237,7 @@ bool FlowViewWindow::eventFilter(QObject *obj, QEvent *event)
             btnFwdOneClick();
             break;
         case Qt::Key_F1:
-            HelpWindow::getRef()->showHelp("flowview.html");
+            HelpWindow::getRef()->showHelp("flowview.md");
             break;
         }
         return true;
@@ -224,6 +247,21 @@ bool FlowViewWindow::eventFilter(QObject *obj, QEvent *event)
     }
 }
 
+void FlowViewWindow::changeGraphVisibility(int state){
+    QCheckBox *sender = qobject_cast<QCheckBox *>(QObject::sender());
+    if(sender){
+        sender->objectName();
+        int graphId = sender->objectName().right(1).toInt();
+        for (int k = 0; k < 8; k++)
+        {
+            if (k == graphId && graphRef[k] && graphRef[k]->data()){
+                graphRef[k]->setVisible(state);
+            }
+        }
+
+        ui->graphView->replot();
+    }
+}
 void FlowViewWindow::gotCellClick(int x, int y)
 {
     int bitnum = (7-x) + (8 * y);
@@ -231,6 +269,11 @@ void FlowViewWindow::gotCellClick(int x, int y)
     if (triggerBits & (1ull << bitnum)) ui->flowView->setCellTextState(x, y, GridTextState::BOLD_BLUE);
     else ui->flowView->setCellTextState(x, y, GridTextState::NORMAL);
     qDebug() << "Bit Num: " << bitnum << "   Hex of trigger bits: " << QString::number(triggerBits, 16);
+}
+
+void FlowViewWindow::graphRangeChanged(int range) {
+    ui->rangeValue->setText(QString::number(range));
+    updateGraphLocation();
 }
 
 void FlowViewWindow::updateTriggerValues()
@@ -293,7 +336,9 @@ void FlowViewWindow::gotCenterTimeID(int32_t ID, double timestamp)
             memcpy(refBytes, currBytes, 8);
         }
 
-        memcpy(currBytes, frameCache.at(currentPosition).payload().data(), 8);
+        memset(currBytes, 0, 8); //first zero out all 8 bytes
+
+        memcpy(currBytes, frameCache.at(currentPosition).payload().data(), frameCache.at(currentPosition).payload().length());
 
         updateDataView();
     }
@@ -473,7 +518,8 @@ void FlowViewWindow::updatedFrames(int numFrames)
         if (ui->cbLiveMode->checkState() == Qt::Checked)
         {
             currentPosition = frameCache.count() - 1;
-            memcpy(currBytes, frameCache.at(currentPosition).payload(), 8);
+            memset(currBytes, 0, 8);
+            memcpy(currBytes, frameCache.at(currentPosition).payload().data(), frameCache.at(currentPosition).payload().length());
             memcpy(refBytes, currBytes, 8);
 
         }
@@ -520,8 +566,10 @@ void FlowViewWindow::createGraph(int byteNum)
     {
         frame = &frameCache[j];
         data = reinterpret_cast<const unsigned char *>(frame->payload().constData());
-
-        tempVal = data[byteNum];
+        if (byteNum < frameCache[j].payload().length())
+            tempVal = data[byteNum];
+        else
+            tempVal = 0;
 
         if (graphByTime)
         {
@@ -609,14 +657,24 @@ void FlowViewWindow::changeID(QString newID)
 
     updateGraphLocation();
 
-    memcpy(currBytes, frameCache.at(currentPosition).payload().constData(), 8);
+    memset(currBytes, 0, 8);
+    memcpy(currBytes, frameCache.at(currentPosition).payload().constData(), frameCache.at(currentPosition).payload().length());
     memcpy(refBytes, currBytes, 8);
 
     updateDataView();
+    ui->check_0->setChecked(true);
+    ui->check_1->setChecked(true);
+    ui->check_2->setChecked(true);
+    ui->check_3->setChecked(true);
+    ui->check_4->setChecked(true);
+    ui->check_5->setChecked(true);
+    ui->check_6->setChecked(true);
+    ui->check_7->setChecked(true);
 }
 
 void FlowViewWindow::btnBackOneClick()
 {
+    ui->cbLiveMode->setChecked(false);
     playbackTimer->stop(); //pushing this button halts automatic playback
     playbackActive = false;
 
@@ -626,6 +684,7 @@ void FlowViewWindow::btnBackOneClick()
 
 void FlowViewWindow::btnPauseClick()
 {
+    ui->cbLiveMode->setChecked(false);
     playbackActive = false;
     playbackTimer->stop();
     updateDataView();
@@ -633,6 +692,7 @@ void FlowViewWindow::btnPauseClick()
 
 void FlowViewWindow::btnReverseClick()
 {
+    ui->cbLiveMode->setChecked(false);
     playbackActive = true;
     playbackForward = false;
     playbackTimer->start();
@@ -640,12 +700,13 @@ void FlowViewWindow::btnReverseClick()
 
 void FlowViewWindow::btnStopClick()
 {
+    ui->cbLiveMode->setChecked(false);
     playbackTimer->stop(); //pushing this button halts automatic playback
     playbackActive = false;
     currentPosition = 0;
 
-
-    memcpy(currBytes, frameCache.at(currentPosition).payload().constData(), 8);
+    memset(currBytes, 0, 8);
+    memcpy(currBytes, frameCache.at(currentPosition).payload().constData(), frameCache.at(currentPosition).payload().length());
     memcpy(refBytes, currBytes, 8);
 
     updateFrameLabel();
@@ -654,6 +715,7 @@ void FlowViewWindow::btnStopClick()
 
 void FlowViewWindow::btnPlayClick()
 {
+    ui->cbLiveMode->setChecked(false);
     playbackActive = true;
     playbackForward = true;
     playbackTimer->start();
@@ -661,6 +723,7 @@ void FlowViewWindow::btnPlayClick()
 
 void FlowViewWindow::btnFwdOneClick()
 {
+    ui->cbLiveMode->setChecked(false);
     playbackTimer->stop();
     playbackActive = false;
     updatePosition(true);
@@ -726,6 +789,9 @@ void FlowViewWindow::updateDataView()
     ui->flowView->setReference(refBytes, false);
     ui->flowView->updateData(currBytes, true);
 
+    ui->timelineSlider->setMaximum(frameCache.count() - 1);
+    ui->timelineSlider->setValue(currentPosition);
+
     for (int i = 0; i < 8; i++)
     {
         if (currBytes[i] == triggerValues[i])
@@ -740,6 +806,13 @@ void FlowViewWindow::updateDataView()
 
     updateFrameLabel();
 
+}
+
+void FlowViewWindow::gotoFrame(int frame) {
+    if (frameCache.count() >= frame) currentPosition = frame;
+    else currentPosition = 0;
+
+    if (ui->cbSync->checkState() == Qt::Checked) emit sendCenterTimeID(frameCache[currentPosition].frameId(), frameCache[currentPosition].timeStamp().microSeconds() / 1000000.0);
 }
 
 void FlowViewWindow::updatePosition(bool forward)
@@ -765,7 +838,7 @@ void FlowViewWindow::updatePosition(bool forward)
     //get through that then they're changed and a trigger so we stop playback at this frame.
     uint64_t changedBits = 0;
     uint8_t cngByte;
-    for (int i = 0; i < 8; i++)
+    for (int i = 0; i < frameCache.at(currentPosition).payload().length(); i++)
     {
         unsigned char thisByte = static_cast<unsigned char>(frameCache.at(currentPosition).payload().data()[i]);
         cngByte = currBytes[i] ^ thisByte;
@@ -782,17 +855,19 @@ void FlowViewWindow::updatePosition(bool forward)
         playbackTimer->stop();
     }
 
-    memcpy(currBytes, frameCache.at(currentPosition).payload().constData(), 8);
+    memset(currBytes, 0, 8);
+    memcpy(currBytes, frameCache.at(currentPosition).payload().constData(), frameCache.at(currentPosition).payload().length());
 
     if (ui->cbSync->checkState() == Qt::Checked) emit sendCenterTimeID(frameCache[currentPosition].frameId(), frameCache[currentPosition].timeStamp().microSeconds() / 1000000.0);
+    ui->timelineSlider->setValue(currentPosition);
 }
 
 void FlowViewWindow::updateGraphLocation()
 {
     if (frameCache.count() == 0) return;
-    int start = currentPosition - 5;
+    int start = currentPosition - ui->graphRangeSlider->value();
     if (start < 0) start = 0;
-    int end = currentPosition + 5;
+    int end = currentPosition + ui->graphRangeSlider->value();
     if (end >= frameCache.count()) end = frameCache.count() - 1;
     if (ui->cbTimeGraph->isChecked())
     {

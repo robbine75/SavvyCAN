@@ -54,6 +54,8 @@ public:
     CANFrameModel * getCANFrameModel();
     ~MainWindow();
 
+    void handleDroppedFile(const QString &filename);
+
 private slots:
     void handleLoadFile();
     void handleSaveFile();
@@ -92,6 +94,9 @@ private slots:
     void connectionStatusUpdated(int conns);
     void gridClicked(QModelIndex);
     void gridDoubleClicked(QModelIndex);
+    void gridContextMenuRequest(QPoint pos);
+    void setupAddToNewGraph();
+    void setupSendToLatestGraphWindow();
     void interpretToggled(bool);
     void overwriteToggled(bool);
     void logReceivedFrame(CANConnection*, QVector<CANFrame>);
@@ -139,7 +144,9 @@ private:
     bool useHex;
     bool allowCapture;
     bool secondsMode;
+    bool millisMode;
     bool useSystemClock;
+    bool ignoreDBCColors;
     bool bDirty; //have frames been added or subtracted since the last save/load?
     bool useFiltered; //should sub-windows use the unfiltered or filtered frames list?
 
@@ -147,7 +154,11 @@ private:
     int continuousLogFlushCounter;
 
     //References to other windows we can display
-    GraphingWindow *graphingWindow;
+
+    //Graph window is allowed to instantiate more than once. All the rest are not (yet).
+    GraphingWindow *lastGraphingWindow;
+    QList<GraphingWindow *> graphWindows;
+
     FrameInfoWindow *frameInfoWindow;
     FramePlaybackWindow *playbackWindow;
     FlowViewWindow *flowViewWindow;
@@ -178,8 +189,11 @@ private:
     QLabel lbHelp;
     int normalRowHeight;
     bool isConnected;
+    QPoint contextMenuPosition;
 
     //private methods
+    QString getSignalNameFromPosition(QPoint pos);
+    uint32_t getMessageIDFromPosition(QPoint pos);
     void saveDecodedTextFile(QString);
     void addFrameToDisplay(CANFrame &, bool);
     void updateFileStatus();

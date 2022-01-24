@@ -54,6 +54,7 @@ protected:
 private:
     QSet<QString> m_keywords;
     QSet<QString> m_knownIds;
+    QSet<QString> m_customIds;
     QHash<JSEdit::ColorComponent, QColor> m_colors;
     QString m_markString;
     Qt::CaseSensitivity m_markCaseSensitivity;
@@ -73,11 +74,13 @@ JSHighlighter::JSHighlighter(QTextDocument *parent)
     m_colors[JSEdit::Keyword]    = QColor("#000080");
     m_colors[JSEdit::BuiltIn]    = QColor("#008080");
     m_colors[JSEdit::Marker]     = QColor("#ffff00");
+    m_colors[JSEdit::Custom]     = QColor("#ff00ff");
 
     // https://developer.mozilla.org/en/JavaScript/Reference/Reserved_Words
     m_keywords << "break";
     m_keywords << "case";
     m_keywords << "catch";
+    m_keywords << "const";
     m_keywords << "continue";
     m_keywords << "default";
     m_keywords << "delete";
@@ -89,6 +92,7 @@ JSHighlighter::JSHighlighter(QTextDocument *parent)
     m_keywords << "if";
     m_keywords << "in";
     m_keywords << "instanceof";
+    m_keywords << "let";
     m_keywords << "new";
     m_keywords << "return";
     m_keywords << "switch";
@@ -137,7 +141,6 @@ JSHighlighter::JSHighlighter(QTextDocument *parent)
     m_knownIds << "arguments";
     m_knownIds << "arity";
     m_knownIds << "caller";
-    m_knownIds << "constructor";
     m_knownIds << "length";
     m_knownIds << "name";
     m_knownIds << "apply";
@@ -248,6 +251,27 @@ JSHighlighter::JSHighlighter(QTextDocument *parent)
     m_knownIds << "window";
     m_knownIds << "navigator";
     m_knownIds << "userAgent";
+
+    //Custom objects
+    m_customIds << "host";
+    m_customIds << "can";
+    m_customIds << "isotp";
+    m_customIds << "uds";
+    //Custom callback functions
+    m_customIds << "setup";
+    m_customIds << "tick";
+    m_customIds << "gotCANFrame";
+    m_customIds << "gotISOTPMessage";
+    m_customIds << "gotUDSMessage";
+    //Custom functions
+    m_customIds << "setTickInterval";
+    m_customIds << "log";    //Duplicate
+    m_customIds << "addParameter";
+    m_customIds << "setFilter";
+    m_customIds << "clearFilters";
+    m_customIds << "sendFrame";
+    m_customIds << "sendISOTP";
+    m_customIds << "sendUDS";
 }
 
 void JSHighlighter::setColor(JSEdit::ColorComponent component, const QColor &color)
@@ -265,10 +289,12 @@ void JSHighlighter::highlightBlock(const QString &text)
         Identifier = 2,
         String = 3,
         Comment = 4,
-        Regex = 5
+        Regex = 5,
+        HexNumber = 6
     };
 
     QList<int> bracketPositions;
+    QString previousToken;
 
     int blockState = previousBlockState();
     int bracketLevel = blockState >> 4;
@@ -290,6 +316,10 @@ void JSHighlighter::highlightBlock(const QString &text)
             start = i;
             if (ch.isSpace()) {
                 ++i;
+            } else if (ch == '0' && (next == 'x' || next == 'X')) {
+                ++i;
+                ++i;
+                state = HexNumber;
             } else if (ch.isDigit()) {
                 ++i;
                 state = Number;
@@ -333,13 +363,29 @@ void JSHighlighter::highlightBlock(const QString &text)
             }
             break;
 
+        case HexNumber:
+            if (ch.isSpace() || !(ch.isDigit() || QString("ABCDEF").contains(ch.toUpper()))) {
+                setFormat(start, i - start, m_colors[JSEdit::Number]);
+                state = Start;
+            } else {
+                ++i;
+            }
+            break;
+
         case Identifier:
             if (ch.isSpace() || !(ch.isDigit() || ch.isLetter() || ch == '_')) {
                 QString token = text.mid(start, i - start).trimmed();
-                if (m_keywords.contains(token))
+                if (m_customIds.contains(token) && m_customIds.contains(previousToken)) {
+                    setFormat(start, i - start, m_colors[JSEdit::Custom]);
+                } else if (m_keywords.contains(token)) {
                     setFormat(start, i - start, m_colors[JSEdit::Keyword]);
-                else if (m_knownIds.contains(token))
+                } else if (m_knownIds.contains(token)) {
                     setFormat(start, i - start, m_colors[JSEdit::BuiltIn]);
+                    if (ch == '.') previousToken = token;
+                } else if (m_customIds.contains(token)) {
+                    setFormat(start, i - start, m_colors[JSEdit::Custom]);
+                    if (ch == '.') previousToken = token;
+                }
                 state = Start;
             } else {
                 ++i;

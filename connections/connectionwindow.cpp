@@ -62,12 +62,17 @@ ConnectionWindow::ConnectionWindow(QWidget *parent) :
     connect(ui->btnMoveUp, &QPushButton::clicked, this, &ConnectionWindow::moveConnUp);
     connect(ui->btnMoveDown, &QPushButton::clicked, this, &ConnectionWindow::moveConnDown);
 
+    ui->cbBusSpeed->addItem("33333");
     ui->cbBusSpeed->addItem("50000");
     ui->cbBusSpeed->addItem("100000");
     ui->cbBusSpeed->addItem("125000");
     ui->cbBusSpeed->addItem("250000");
     ui->cbBusSpeed->addItem("500000");
     ui->cbBusSpeed->addItem("1000000");
+    //ui->cbBusSpeed->addItem("75000");
+    //ui->cbBusSpeed->addItem("166666");
+    //ui->cbBusSpeed->addItem("233333");
+    //ui->cbBusSpeed->addItem("400000");
 
     rxBroadcastGVRET = new QUdpSocket(this);
     //Need to make sure it tries to share the address in case there are
@@ -184,7 +189,7 @@ bool ConnectionWindow::eventFilter(QObject *obj, QEvent *event)
         switch (keyEvent->key())
         {
         case Qt::Key_F1:
-            HelpWindow::getRef()->showHelp("connectionwindow.html");
+            HelpWindow::getRef()->showHelp("connectionwindow.md");
             break;
         }
         return true;
@@ -254,7 +259,11 @@ void ConnectionWindow::handleNewConn()
         newPort = thisDialog->getPortName();
         newDriver = thisDialog->getDriverName();
         conn = create(newType, newPort, newDriver);
-        if (conn) connModel->add(conn);
+        if (conn)
+        {
+            connModel->add(conn);
+            ui->tableConnections->setCurrentIndex(connModel->index(connModel->rowCount() - 1, 1));
+        }
     }
     delete thisDialog;
 }
@@ -423,6 +432,9 @@ void ConnectionWindow::currentRowChanged(const QModelIndex &current, const QMode
         CANConnection* conn_p = connModel->getAtIdx(selIdx);
         if(!conn_p) return;
 
+        //because this might have already been setup during the initial setup so tear that one down and then create the normal one.
+        //disconnect(conn_p, SIGNAL(debugOutput(QString)), 0, 0);
+
         numBuses = conn_p->getNumBuses();
         int numB = ui->tabBuses->count();
         for (int i = 0; i < numB; i++) ui->tabBuses->removeTab(0);
@@ -475,7 +487,11 @@ CANConnection* ConnectionWindow::create(CANCon::type pTye, QString pPortName, QS
         /* connect signal */
         connect(conn_p, SIGNAL(status(CANConStatus)),
                 this, SLOT(connectionStatus(CANConStatus)));
-
+        if (ui->ckEnableConsole->isChecked())
+        {
+            //set up the debug console to operate if we've selected it. Doing so here allows debugging right away during set up
+            connect(conn_p, SIGNAL(debugOutput(QString)), this, SLOT(getDebugText(QString)));
+        }
         /*TODO add return value and checks */
         conn_p->start();
     }

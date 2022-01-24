@@ -14,6 +14,8 @@ class GraphingWindow;
 class GraphParams
 {
 public:
+    GraphParams();
+
     uint32_t ID;
     int startBit, numBits;
     bool intelFormat;
@@ -34,6 +36,12 @@ public:
     //the below stuff is used for internal purposes only - code should be refactored so these can be private
     QVector<double> x, y;
     double xbias;
+    int64_t prevValTable;
+    QPointF prevValLocation;
+    QString prevValStr;
+    QCPItemBracket *lastBracket;
+    QList<QCPItemBracket *> brackets;
+    QList<QCPItemText *> bracketTexts;
 };
 
 class GraphingWindow : public QDialog
@@ -44,6 +52,9 @@ public:
     explicit GraphingWindow(const QVector<CANFrame> *, QWidget *parent = 0);
     ~GraphingWindow();
     void showEvent(QShowEvent*);
+
+public slots:
+    void createGraph(GraphParams &params, bool createGraphParam = true);
 
 private slots:
     void titleDoubleClick(QMouseEvent *event, QCPTextElement *title);
@@ -66,8 +77,7 @@ private slots:
     void rescaleAxis(QCPAxis* axis);
     void rescaleToData();
     void toggleFollowMode();
-    void addNewGraph();
-    void createGraph(GraphParams &params, bool createGraphParam = true);
+    void addNewGraph();    
     void appendToGraph(GraphParams &params, CANFrame &frame, QVector<double> &x, QVector<double> &y);
     void editSelectedGraph();
     void updatedFrames(int);
@@ -99,6 +109,7 @@ private:
     void readSettings();
     void writeSettings();
     bool eventFilter(QObject *obj, QEvent *event);
+    void changeEvent(QEvent *event);
 };
 
 #endif // GRAPHINGWINDOW_H

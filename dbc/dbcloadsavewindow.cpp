@@ -124,7 +124,7 @@ bool DBCLoadSaveWindow::eventFilter(QObject *obj, QEvent *event)
         switch (keyEvent->key())
         {
         case Qt::Key_F1:
-            HelpWindow::getRef()->showHelp("dbc_manager.html");
+            HelpWindow::getRef()->showHelp("dbc_manager.md");
             break;
         }
         return true;
@@ -161,6 +161,7 @@ void DBCLoadSaveWindow::loadFile()
     QStringList filters;
     filters.append(QString(tr("DBC File (*.dbc)")));
     filters.append(QString(tr("Tesla JSON File (*.json)")));
+    filters.append(QString(tr("Secret CSV Signal Defs (*.csv)")));
 
     dialog.setDirectory(settings.value("DBC/LoadSaveDirectory", dialog.directory().path()).toString());
     dialog.setFileMode(QFileDialog::ExistingFile);
@@ -182,6 +183,11 @@ void DBCLoadSaveWindow::loadFile()
         {
             if (!filename.contains('.')) filename += ".json";
             file = dbcHandler->loadJSONFile(filename);
+        }
+        if (dialog.selectedNameFilter() == filters[2])
+        {
+            if (!filename.contains('.')) filename += ".csv";
+            file = dbcHandler->loadSecretCSVFile(filename);
         }
     }
 

@@ -115,18 +115,17 @@ public: //TODO: this is sloppy. It shouldn't all be public!
     bool processAsText(const CANFrame &frame, QString &outString, bool outputName = true);
     bool processAsInt(const CANFrame &frame, int32_t &outValue);
     bool processAsDouble(const CANFrame &frame, double &outValue);
+    bool getValueString(int64_t intVal, QString &outString);
     QString makePrettyOutput(double floatVal, int64_t intVal, bool outputName = true, bool isInteger = false);
     QString processSignalTree(const CANFrame &frame);
     DBC_ATTRIBUTE_VALUE *findAttrValByName(QString name);
     DBC_ATTRIBUTE_VALUE *findAttrValByIdx(int idx);
+    bool isSignalInMessage(const CANFrame &frame);
 
     friend bool operator<(const DBC_SIGNAL& l, const DBC_SIGNAL& r)
     {
         return (l.name.toLower() < r.name.toLower());
     }
-private:
-    bool isSignalInMessage(const CANFrame &frame);
-    bool _sigInMsgPriv(const CANFrame &frame, DBC_SIGNAL *multiplexor);
 };
 
 class DBCSignalHandler; //forward declaration to keep from having to include dbchandler.h in this file and thus create a loop
@@ -137,6 +136,7 @@ public:
     DBC_MESSAGE();
 
     uint32_t ID;
+    bool extendedID;
     QString name;
     QString comment;
     unsigned int len;
